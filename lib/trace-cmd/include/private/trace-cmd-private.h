@@ -440,7 +440,7 @@ const char *tracecmd_tsync_proto_select(struct tracecmd_tsync_protos *protos, ch
 bool tsync_proto_is_supported(const char *proto_name);
 void tracecmd_tsync_with_host(struct tracecmd_time_sync *tsync);
 void tracecmd_tsync_with_guest(struct tracecmd_time_sync *tsync);
-int tracecmd_tsync_get_offsets(struct tracecmd_time_sync *tsync,
+int tracecmd_tsync_get_offsets(struct tracecmd_time_sync *tsync, int cpu,
 				int *count, long long **ts,
 				long long **offsets, long long **scalings);
 int tracecmd_tsync_get_proto_flags(struct tracecmd_time_sync *tsync,

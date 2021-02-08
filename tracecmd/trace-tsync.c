@@ -134,51 +134,75 @@ out:
 
 static void write_guest_time_shift(struct buffer_instance *instance)
 {
-	struct tracecmd_output *handle;
-	struct iovec vector[6];
+	struct tracecmd_output *handle = NULL;
+	struct iovec *vector = NULL;
 	unsigned int flags;
 	long long *scalings = NULL;
 	long long *offsets = NULL;
 	long long *ts = NULL;
 	const char *file;
+	int fd = -1;
+	int vcount;
 	int count;
+	int i, j;
 	int ret;
-	int fd;
 
-	ret = tracecmd_tsync_get_offsets(&instance->tsync, &count,
-					 &ts, &offsets, &scalings);
-	if (ret < 0 || !count || !ts || !offsets || !scalings)
+	if (!instance->tsync.vcpu_count)
+		return;
+	vcount = 3 + (4 * instance->tsync.vcpu_count);
+	vector = calloc(vcount, sizeof(struct iovec));
+	if (!vector)
 		return;
 	ret = tracecmd_tsync_get_proto_flags(&instance->tsync, &flags);
 	if (ret < 0)
-		return;
+		goto out;
 
 	file = instance->output_file;
 	fd = open(file, O_RDWR);
 	if (fd < 0)
 		die("error opening %s", file);
 	handle = tracecmd_get_output_handle_fd(fd);
-	vector[0].iov_len = 8;
-	vector[0].iov_base = &top_instance.trace_id;
-	vector[1].iov_len = 4;
-	vector[1].iov_base = &flags;
-	vector[2].iov_len = 4;
-	vector[2].iov_base = &count;
-	vector[3].iov_len = 8 * count;
-	vector[3].iov_base = ts;
-	vector[4].iov_len = 8 * count;
-	vector[4].iov_base = offsets;
-	vector[5].iov_len = 8 * count;
-	vector[5].iov_base = scalings;
-	tracecmd_add_option_v(handle, TRACECMD_OPTION_TIME_SHIFT, vector, 6);
+	if (!handle)
+		goto out;
+	j = 0;
+	vector[j].iov_len = 8;
+	vector[j++].iov_base = &top_instance.trace_id;
+	vector[j].iov_len = 4;
+	vector[j++].iov_base = &flags;
+	vector[j].iov_len = 4;
+	vector[j++].iov_base = &instance->tsync.vcpu_count;
+	for (i = 0; i < instance->tsync.vcpu_count; i++) {
+		if (j >= vcount)
+			break;
+		ret = tracecmd_tsync_get_offsets(&instance->tsync, i, &count,
+						 &ts, &offsets, &scalings);
+		if (ret < 0 || !count || !ts || !offsets || !scalings)
+			break;
+		vector[j].iov_len = 4;
+		vector[j++].iov_base = &count;
+		vector[j].iov_len = 8 * count;
+		vector[j++].iov_base = ts;
+		vector[j].iov_len = 8 * count;
+		vector[j++].iov_base = offsets;
+		vector[j].iov_len = 8 * count;
+		vector[j++].iov_base = scalings;
+	}
+	if (i < instance->tsync.vcpu_count)
+		goto out;
+	tracecmd_add_option_v(handle, TRACECMD_OPTION_TIME_SHIFT, vector, vcount);
 	tracecmd_append_options(handle);
-	tracecmd_output_close(handle);
 #ifdef TSYNC_DEBUG
 	if (count > 1)
 		printf("Got %d timestamp synch samples for guest %s in %lld ns trace\n\r",
 			count, tracefs_instance_get_name(instance->tracefs),
 			ts[count - 1] - ts[0]);
 #endif
+out:
+	if (handle)
+		tracecmd_output_close(handle);
+	else if (fd >= 0)
+		close(fd);
+	free(vector);
 }
 
 void tracecmd_host_tsync_complete(struct buffer_instance *instance)
@@ -261,6 +285,7 @@ const char *tracecmd_guest_tsync(struct tracecmd_tsync_protos *tsync_protos,
 
 	pthread_attr_init(&attrib);
 	tsync->proto_name = proto;
+	tsync->vcpu_count = tracecmd_count_cpus();
 	pthread_attr_setdetachstate(&attrib, PTHREAD_CREATE_JOINABLE);
 
 	ret = pthread_create(thr_id, &attrib, tsync_agent_thread, tsync);
